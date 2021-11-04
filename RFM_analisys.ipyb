@@ -1,0 +1,189 @@
+import pandas as pd
+from sqlalchemy import create_engine
+import matplotlib.pyplot as plt # 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+engine_path = f"""clickhouse+native://{ch_secret['db_user']}:{ch_secret['db_password']}@{ch_secret['db_host']}:{ch_secret['db_port']}/{ch_secret['db_name']}"""
+engine = create_engine(engine_path)
+engine
+
+query = 'SELECT * FROM events'
+events = pd.read_sql(query, engine)
+events 
+
+## Monetary
+orders['invoice_id'] = orders['invoice_id'].apply(str)
+orders['customer_id'] = orders['customer_id'].apply(str)
+orders['total_amount'] = orders['total_amount'].astype('float64')
+
+mTable = orders.groupby('customer_id')['total_amount'].sum().reset_index()
+mTable.head()
+
+%matplotlib inline 
+
+plt.figure(figsize=(10, 5)) 
+plt.boxplot(mTable['total_amount'])
+
+plt.figure(figsize=(10, 5)) 
+plt.title('Распределение клиентов по величине суммарного дохода') 
+plt.xlabel('Размер суммарного дохода с клиента') 
+plt.ylabel('Количество клиентов') 
+plt.grid() 
+
+# Уменьшаем разброс вручную, чтобы увидеть левый хвост распределения
+plt.hist(mTable[mTable['total_amount'] < 30_000]['total_amount'], bins=100)
+plt.show()
+
+def mclass(x):
+    if x <= 1000:
+        return 'M3'
+    elif x <= 5000:
+        return 'M2'
+    else:
+        return 'M1'
+
+# Каждое из значений total_amount передаем в функцию mclass и результат запишем в новый столбец
+mTable['monetary'] = mTable['total_amount'].apply(mclass) 
+
+mTable.head()
+mTable['monetary'].value_counts()
+
+## Frequency
+fTable = orders.groupby('customer_id')['invoice_id'].nunique().reset_index()
+fTable.columns = ['customer_id', 'orders_count']
+fTable
+
+fTable['orders_count'].describe()
+
+def fclass(x):
+    if x <= 1:
+        return 'F3'
+    elif x <= 3:
+        return 'F2'
+    else:
+        return 'F1'
+
+fTable['frequency'] = fTable['orders_count'].apply(fclass)
+
+fTable['frequency'].value_counts()
+
+mfTable = pd.merge(mTable, fTable, on='customer_id').reset_index()
+
+mfTable = mfTable[['customer_id', 'monetary', 'frequency']]
+mfTable.head()
+
+events['timestamp'] = pd.to_datetime(events['timestamp'])
+events['user_id'] = events['user_id'].apply(str)
+events['invoice_id'] = events['invoice_id'].apply(str)
+
+events.head()
+
+purchases = events[events['event'] == 'purchase']
+purchases.head()
+
+max_purchases = purchases.groupby('user_id')['timestamp'].max().reset_index()
+max_purchases.columns = ['customer_id', 'last_purchase']
+
+pageviews = events[events['event'] == 'pageview']
+max_pageviews = pageviews.groupby('user_id')['timestamp'].max().reset_index()
+max_pageviews.columns = ['customer_id', 'last_visit']
+
+rTable = pd.merge(max_purchases, max_pageviews, on='customer_id', how='inner')
+rTable.info()
+rTable.head()
+
+### Проставим метку R
+NOW = events['timestamp'].max()
+from datetime import datetime, timedelta
+
+
+def rclass(x):
+    if x['last_purchase'] >= NOW - timedelta(days=6*30):   #
+        return 'R1'
+    elif x['last_purchase'] < NOW - timedelta(days=6*30) and x['last_visit'] >= NOW - timedelta(days=6*30):
+        return 'R2'
+    else:
+        return 'R3'
+
+rTable['recency'] = rTable.apply(rclass, axis=1)
+rTable.head()
+
+rTable['recency'].value_counts()
+rTable = rTable[['customer_id', 'recency']]
+
+rfmTable = pd.merge(mfTable, 
+                    rTable, 
+                    on='customer_id', 
+                    how='inner')
+rfmTable.head()
+
+rfmTable['rfm_group'] = rfmTable['recency'] + rfmTable['frequency'] + rfmTable['monetary']
+rfmTable.head()
+
+rfmTable['rfm_group'].value_counts()
+
+rfmTable
+
+## Построим heatmap
+rfm_description = rfmTable.copy() # создадим новый датафрейм с копией исходного
+rfm_description
+
+monetary_dict = {"M1": "с высоким чеком", 'M2': "со средним чеком", 'M3': "с низким чеком",}
+frequency_dict = {'F1': "частые",'F2': "редкие", 'F3': "разовые",}
+recency_dict = {'R1': "недавние",'R2': "спящие",'R3': "давние"}
+
+rfm_description['monetary'] = rfm_description['monetary'].map(monetary_dict)
+rfm_description['frequency'] = rfm_description['frequency'].map(frequency_dict)
+rfm_description['recency'] = rfm_description['recency'].map(recency_dict)
+
+rfm_description['mr'] =  rfm_description['monetary'] + ' ' + rfm_description['recency']
+rfm_description
+
+rfm = rfm_description.groupby(['mr', 'frequency'], as_index=False)['customer_id'].count()
+rfm
+
+rfm_pivot = rfm.pivot(index="mr", 
+                columns="frequency", 
+                values="customer_id"
+                                    ).reset_index()
+rfm_pivot.fillna(0, inplace=True)
+rfm_pivot = rfm_pivot.set_index('mr')
+rfm_pivot
+
+
+%matplotlib inline 
+f, ax = plt.subplots(figsize=(10, 5)) 
+                     
+sns.heatmap(rfm_pivot, 
+            annot=True,
+            cmap="YlGnBu",
+            fmt='g',
+            annot_kws={'size':12}) 
+            
+plt.title("RFM-анализ")            
+plt.yticks(rotation=0) 
+ax.xaxis.set_ticks_position('top') 
+ax.xaxis.set_label_position('top')
+            
+
+plt.ylabel("recency + monetary")
+plt.xlabel("frequency")
+plt.show()
+
+
+rfmTable = rfmTable[['customer_id', 'rfm_group']]
+users['user_id'] = users['user_id'].apply(str)
+
+rfm_users = pd.merge(users, 
+                     rfmTable, 
+                     left_on='user_id', 
+                     right_on='customer_id', 
+                     how='inner')
+
+rfm_group = rfm_users[['first_name', 'last_name', 'email', 'rfm_group']]
+rfm_group.head()
+
+rfm_users.to_csv('rfm_users.csv', index=False)
+
