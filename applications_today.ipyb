@@ -1,0 +1,22 @@
+### Задача
+### Напишем функцию, которая возвращает заявки, пришедщие сегодня
+
+from orders_data import orders as order_info #загрузим данные о заявках
+order_info # посмотрим, в каком формате нам приходят данные
+
+
+now.strftime("%A, %e. %B %y. %I:%M%p")
+
+def today_order(order_dict):
+    new_dict = dict()                               # словарь, который будем возвращать
+    now = datetime.now()                            # переменная с текущей датой now
+    now_in_str = datetime.strftime(now, '%d.%m.%Y') # строка с датой для репортинга
+   
+    for key,value in order_dict.items():            # проверяем все заявки на дату заявки
+        if datetime.strptime(value,'%Y-%m-%d %H:%M').date() == now.date():
+            new_dict[key] = value
+    
+    return 'Заявки за {0}\n {1}'.format(now_in_str, new_dict) # возвращаем форматированную строку
+
+
+print(today_order(order_info))# печатаем результат функции
