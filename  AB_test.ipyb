@@ -1,0 +1,142 @@
+import pandas as pd
+import numpy as np
+import seaborn as sns 
+import matplotlib.pyplot as plt
+import statsmodels.stats.proportion as proportion
+import bootstrapped.bootstrap as bs
+import bootstrapped.stats_functions as bs_stats
+import bootstrapped.compare_functions as bs_compare
+import statsmodels.stats.power as smp
+
+
+historical_data = pd.read_csv('historical_data.csv', parse_dates = [1,2], index_col = 0)
+historical_data.head()
+
+np.percentile(historical_data['time_to_order'], 100) # сотый перцентиль - значение для всей выборки
+np.percentile(historical_data['time_to_order'], 95)
+np.percentile(historical_data['time_to_order'], 85)
+
+
+perc_85 = round(np.percentile(historical_data['time_to_order'], 85), 1)
+
+
+plt.figure(figsize=(16,9))
+sns.distplot(historical_data['time_to_order'])
+plt.vlines(perc_85, ymin = 0, ymax = 0.7, linestyles = 'dashed', label = f'85-ый перцентиль – {perc_85} дней')
+plt.title('Распределение времени между первым заходом на сайт и покупкой')
+plt.xlabel('Количество дней')
+plt.ylabel('Количество пользователей')
+plt.legend()
+plt.show()
+
+
+data = pd.read_csv('data.csv', index_col = 0)
+data.head()
+
+metrics = data.groupby('test_group', as_index= False).\
+                        agg({'user_id': 'count', 'created_order_in_3_days': 'sum'})
+
+metrics['conversion'] = round(metrics['created_order_in_3_days']/metrics['user_id']*100, 2)
+metrics
+
+def plot_segments_distribution(df, segment_columns, test_factor):
+    for segment in segment_columns:
+        aggregated_data = df.groupby(by = [test_factor, segment])['user_id'].count().reset_index()
+        sns.catplot(x = segment, 
+                    y = 'user_id', 
+                    hue = test_factor, 
+                    data = aggregated_data, 
+                    kind = "bar", 
+                    height = 4, 
+                    aspect = 1.5) 
+
+plot_segments_distribution(data, #датафрейм
+                           ["geo_group", "marketing_group"], #сегменты
+                           "test_group") #тест-фактор
+
+#Пользователи распределены неравномерно. 
+metrics = data.groupby('marketing_group', as_index= False)./
+                       agg({'user_id': 'count', 'created_order_in_3_days': 'sum'})
+metrics['conversion'] = round(metrics['created_order_in_3_days']/metrics['user_id']*100, 2)
+metrics
+
+
+## Проверим распредление после перезапуска эксперимента
+
+data = pd.read_csv('ab_data_restarted.csv', index_col = 0)
+data.head()
+
+metrics = data.groupby('test_group', as_index= False).agg({'user_id': 'count', 'created_order_in_3_days': 'sum'})
+metrics['conversion'] = round(metrics['created_order_in_3_days']/metrics['user_id']*100, 2)
+metrics
+
+plot_segments_distribution(data, ["geo_group", "marketing_group"], "test_group")
+
+
+
+### Посчитаем p-value
+chi2stat, pval, table = proportion.proportions_chisquare(metrics['created_order_in_3_days'], metrics['user_id'])
+alpha = 0.05
+print(pval < alpha)
+
+
+test = data[data['test_group'] == 'test']['order_sum'].dropna().values
+ctrl = data[data['test_group'] == 'control']['order_sum'].dropna().values
+
+boot_results = bs.bootstrap_ab(test = test, ctrl = ctrl
+                              , stat_func = bs_stats.mean
+                              , compare_func = bs_compare.difference
+                              , return_distribution=True)
+boot_results
+
+#Доверительный интервал
+borders = np.percentile(boot_results, [2.5, 97.5]) 
+borders
+
+
+sns.distplot(boot_results) # функция построения распределения
+plt.title('Bootstrap-распределение разниц среднего чека')
+plt.rcParams["figure.figsize"] = (12, 6)
+plt.vlines(0, # отрисуем линию на уровне ноля
+           ymin = 0, 
+           ymax = 0.003, 
+           linestyles= '--', 
+           colors = 'red')
+plt.vlines(borders, # отрисуем перцентили
+           ymin = 0, 
+           ymax = 0.003, 
+           linestyles= '--', 
+           colors = 'grey', 
+           label = '95%-доверительный интервал')
+plt.legend()
+plt.show()
+
+
+## Вычислим мощность при использовании критерия хи-квадрат
+chipower = smp.GofChisquarePower()
+
+#конверсия в контрольной группе
+conversion_control = metrics['conversion'].values[0]/100 
+
+#конверсия в тестовой группе
+conversion_test = metrics['conversion'].values[1]/100
+
+# в столбце 2 значения: кол-во наблюдений для каждой группы — возьмем то, что меньше
+nobs = min(metrics['user_id'])
+
+def chi2_effect_size(p0, p1):
+    return np.sqrt(((p0 - p1)**2 / p0))
+
+chipower.solve_power(effect_size = chi2_effect_size(conversion_control, conversion_test), # разница коэффициентов конверсии
+                                               nobs = nobs, # размер выборки
+                                               alpha = pval, # значение ошибки первого рода на наших данных
+                                               power = None) # функция вернет значение, указаное как None
+
+## Вычислим количество наблюдений, чтобы получить желаемый уровень мощности
+power = 0.8
+size_of_each_test_group = chipower.solve_power(effect_size = chi2_effect_size(conversion_control, conversion_test), 
+                                               nobs = None, 
+                                               alpha = alpha, 
+                                               power = power) 
+print('Необходимый размер выборки для эксперимента - {:.0f}'.format(2*size_of_each_test_group))
+
